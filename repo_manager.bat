@@ -152,9 +152,13 @@ exit /b 0
 :OPEN_CODE
 if "%AUTO_OPEN_CODE%"=="1" (
   where code >nul 2>nul
-  if %errorlevel%==0 start "" code .
+  if not errorlevel 1 (
+    rem /b = no new window
+    start "" /b code . >nul 2>nul
+  )
 )
 exit /b 0
+
 
 :CHECKOUT_OR_CREATE
 :: %1=branch  %2=startpoint
