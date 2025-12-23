@@ -1,16 +1,18 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
 :: =========================
 :: CONFIG
 :: =========================
+:: Put this file in the repo root. Leave REPO_DIR empty to use the .bat directory.
 set "REPO_DIR="
 set "ENV_NAME="
+
 set "MAIN_BRANCH=main"
 set "WORK_BRANCH=work"
 set "AUTO_OPEN_CODE=1"
 
-:: Default: click-to-sync
+:: Default: no args -> SESSION
 if "%~1"=="" goto SESSION
 if /i "%~1"=="SESSION" goto SESSION
 if /i "%~1"=="BEGIN" goto BEGIN
@@ -22,17 +24,18 @@ goto MENU
 :HELP
 echo.
 echo ======================================================
-echo  Repo Manager (click-to-sync)
+echo  Repo Manager (single-window)
 echo ======================================================
-echo  Default (no args): SESSION
-echo    - sync at start (pull/mirror)
-echo    - open shell; type 'exit' -> auto END (commit/push)
+echo  Default: SESSION  (sync now, then command loop)
 echo.
-echo  Behavior:
-echo    - If remote "upstream" exists: mirror upstream -> %MAIN_BRANCH% (force) + sync %WORK_BRANCH%
-echo    - If NO upstream: sync %MAIN_BRANCH% bidirectionally:
-echo        * remote ahead -> pull
-echo        * local ahead  -> push (after optional commit)
+echo  Commands in SESSION:
+echo    status   - git status -sb
+echo    begin    - run BEGIN again
+echo    merge    - run MERGE (only if upstream exists)
+echo    save     - run END (commit/push) and exit
+echo    exit     - same as save
+echo    menu     - go to menu
+echo    help     - show this help
 echo ======================================================
 echo.
 exit /b 0
@@ -40,7 +43,7 @@ exit /b 0
 :MENU
 cls
 call :HELP
-echo  [S] SESSION  - click-to-sync + auto-push on exit
+echo  [S] SESSION  - sync + stay in same window (type save/exit to push)
 echo  [B] BEGIN    - sync now
 echo  [M] MERGE    - backup + merge main->work (needs upstream)
 echo  [E] END      - commit/push now
@@ -73,34 +76,41 @@ git fetch origin --prune >nul 2>nul
 
 set "ORIGIN_HEAD=%MAIN_BRANCH%"
 for /f "delims=" %%R in ('git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2^>nul') do set "ORIGIN_HEAD=%%R"
-if defined ORIGIN_HEAD set "ORIGIN_HEAD=%ORIGIN_HEAD:origin/=%"
+if defined ORIGIN_HEAD set "ORIGIN_HEAD=!ORIGIN_HEAD:origin/=!"
 
 set "UPSTREAM_HEAD=%MAIN_BRANCH%"
 if "%HAS_UPSTREAM%"=="1" (
   git fetch upstream --prune >nul 2>nul
   git remote set-head upstream -a >nul 2>nul
   for /f "delims=" %%R in ('git symbolic-ref --quiet --short refs/remotes/upstream/HEAD 2^>nul') do set "UPSTREAM_HEAD=%%R"
-  if defined UPSTREAM_HEAD set "UPSTREAM_HEAD=%UPSTREAM_HEAD:upstream/=%"
+  if defined UPSTREAM_HEAD set "UPSTREAM_HEAD=!UPSTREAM_HEAD:upstream/=!"
 )
 
-call :FIND_CONDA
+call :FIND_CONDA_SILENT
 exit /b 0
 
 :: =========================
-:: CONDA (optional, quiet + explicit)
+:: CONDA (silent, no command-substitution)
 :: =========================
-:FIND_CONDA
+:FIND_CONDA_SILENT
 set "CONDA_BAT="
-set "CONDA_BASE="
+set "CONDA_STATUS=missing"
 
-:: Only try conda commands if conda is discoverable
-where conda >nul 2>nul
-if %errorlevel%==0 (
-  for /f "usebackq delims=" %%B in (`conda info --base 2^>nul`) do set "CONDA_BASE=%%B"
-  if defined CONDA_BASE if exist "%CONDA_BASE%\condabin\conda.bat" set "CONDA_BAT=%CONDA_BASE%\condabin\conda.bat"
+:: 1) If launched from conda prompt, CONDA_PREFIX is usually set
+if defined CONDA_PREFIX (
+  if exist "%CONDA_PREFIX%\condabin\conda.bat" set "CONDA_BAT=%CONDA_PREFIX%\condabin\conda.bat"
 )
 
-:: Fallback: common install locations
+:: 2) If CONDA_EXE is set, infer base = parent of Scripts\
+if not defined CONDA_BAT if defined CONDA_EXE (
+  if exist "%CONDA_EXE%" (
+    for %%I in ("%CONDA_EXE%") do set "CE_DIR=%%~dpI"
+    for %%I in ("!CE_DIR!\..") do set "CE_BASE=%%~fI"
+    if exist "!CE_BASE!\condabin\conda.bat" set "CONDA_BAT=!CE_BASE!\condabin\conda.bat"
+  )
+)
+
+:: 3) Common install locations
 if not defined CONDA_BAT (
   for %%A in (
     "%USERPROFILE%\anaconda3\condabin\conda.bat"
@@ -110,17 +120,13 @@ if not defined CONDA_BAT (
   ) do if exist "%%~A" set "CONDA_BAT=%%~A"
 )
 
-if not defined CONDA_BAT (
-  set "CONDA_STATUS=missing"
-) else (
-  set "CONDA_STATUS=ok"
-)
+if defined CONDA_BAT set "CONDA_STATUS=ok"
 exit /b 0
 
 :CONDA_ACTIVATE
 if "%ENV_NAME%"=="" exit /b 0
-if "%CONDA_STATUS%"=="missing" (
-  echo INFO: conda not found in PATH (skip activate %ENV_NAME%)
+if not "%CONDA_STATUS%"=="ok" (
+  echo INFO: conda not detected (skip activate %ENV_NAME%)
   exit /b 0
 )
 call "%CONDA_BAT%" activate "%ENV_NAME%" >nul 2>nul
@@ -129,7 +135,7 @@ exit /b 0
 
 :CONDA_ENV_UPDATE
 if "%ENV_NAME%"=="" exit /b 0
-if "%CONDA_STATUS%"=="missing" exit /b 0
+if not "%CONDA_STATUS%"=="ok" exit /b 0
 if exist environment.yml (
   call "%CONDA_BAT%" env update -n "%ENV_NAME%" -f environment.yml --prune >nul
   exit /b 0
@@ -139,7 +145,6 @@ if exist env.yml (
   exit /b 0
 )
 exit /b 0
-
 
 :: =========================
 :: HELPERS
@@ -164,6 +169,7 @@ exit /b %ERRORLEVEL%
 
 :ENSURE_WORK
 set "WORK_EFF=%WORK_BRANCH%"
+
 if "%HAS_UPSTREAM%"=="0" (
   set "WORK_EFF=%MAIN_BRANCH%"
   exit /b 0
@@ -209,7 +215,7 @@ git commit -m "%MSG%" || exit /b 1
 exit /b 0
 
 :: =========================
-:: UPSTREAM MIRROR (NO checkout main)
+:: MIRROR (no checkout main)
 :: =========================
 :MIRROR_UPSTREAM_TO_MAIN
 if "%HAS_UPSTREAM%"=="0" exit /b 0
@@ -222,7 +228,7 @@ git push --force-with-lease origin %MAIN_BRANCH% >nul 2>nul || exit /b 1
 exit /b 0
 
 :: =========================
-:: SIMPLE REPO BIDIRECTIONAL SYNC (no upstream)
+:: SIMPLE REPO BIDIRECTIONAL SYNC
 :: =========================
 :SYNC_SIMPLE_BIDIR_MAIN
 echo.
@@ -230,7 +236,6 @@ echo --- Simple sync (no upstream): %MAIN_BRANCH% <-> origin/%MAIN_BRANCH% ---
 git fetch origin --prune || exit /b 1
 
 call :CHECKOUT_OR_CREATE %MAIN_BRANCH% origin/%ORIGIN_HEAD% || exit /b 1
-
 call :DIRTY_PROMPT_SIMPLE || exit /b 1
 
 git fetch origin --prune || exit /b 1
@@ -244,19 +249,14 @@ for /f "tokens=1,2" %%a in ('git rev-list --left-right --count origin/%MAIN_BRAN
 
 echo INFO: ahead=%AHEAD% behind=%BEHIND%
 
-if "%AHEAD%"=="0" if "%BEHIND%"=="0" (
-  echo OK: already up to date.
-  exit /b 0
-)
+if "%AHEAD%"=="0" if "%BEHIND%"=="0" exit /b 0
 
 if not "%AHEAD%"=="0" if "%BEHIND%"=="0" (
-  echo OK: local is newer -> pushing...
   git push origin %MAIN_BRANCH% || exit /b 1
   exit /b 0
 )
 
 if "%AHEAD%"=="0" if not "%BEHIND%"=="0" (
-  echo OK: remote is newer -> pulling...
   git pull --rebase origin %MAIN_BRANCH% || exit /b 1
   exit /b 0
 )
@@ -287,6 +287,7 @@ if "%HAS_UPSTREAM%"=="0" (
   call :SYNC_SIMPLE_BIDIR_MAIN || (echo ERROR: simple sync failed & pause & exit /b 1)
 ) else (
   call :CHECKOUT_OR_CREATE %WORK_EFF% origin/%WORK_EFF% >nul 2>nul
+
   git status --porcelain | findstr . >nul
   if not errorlevel 1 (
     echo.
@@ -360,14 +361,27 @@ if not errorlevel 1 call :AUTO_COMMIT || (echo ERROR: commit failed & pause & ex
 
 git push origin %WORK_EFF% || (echo ERROR: push failed & pause & exit /b 1)
 echo OK: pushed %WORK_EFF% to origin.
+
+if /i "%~2"=="NOMENU" exit /b 0
 pause
 goto MENU
 
 :SESSION
 call :BEGIN || exit /b 1
 echo.
-echo --- SESSION ACTIVE ---
-echo Type 'exit' to auto-push and close.  (X-close cannot auto-push.)
-cmd /k
-call :ENDOP
-exit /b 0
+echo --- SESSION (same window) ---
+echo Type "help" for commands. Type "save" or "exit" to commit/push and close.
+echo.
+
+:SESSION_LOOP
+set "CMD="
+set /p "CMD=repo_manager> "
+if /i "%CMD%"=="help"   (call :HELP & goto SESSION_LOOP)
+if /i "%CMD%"=="status" (git status -sb & goto SESSION_LOOP)
+if /i "%CMD%"=="begin"  (call :BEGIN & goto SESSION_LOOP)
+if /i "%CMD%"=="merge"  (call :MERGE & goto SESSION_LOOP)
+if /i "%CMD%"=="menu"   goto MENU
+if /i "%CMD%"=="save"   (call :ENDOP DUMMY NOMENU & exit /b 0)
+if /i "%CMD%"=="exit"   (call :ENDOP DUMMY NOMENU & exit /b 0)
+echo Unknown command. Type "help".
+goto SESSION_LOOP
