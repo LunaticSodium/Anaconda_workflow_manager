@@ -87,24 +87,20 @@ call :FIND_CONDA
 exit /b 0
 
 :: =========================
-:: CONDA (optional)
+:: CONDA (optional, quiet + explicit)
 :: =========================
 :FIND_CONDA
 set "CONDA_BAT="
 set "CONDA_BASE="
 
+:: Only try conda commands if conda is discoverable
 where conda >nul 2>nul
 if %errorlevel%==0 (
   for /f "usebackq delims=" %%B in (`conda info --base 2^>nul`) do set "CONDA_BASE=%%B"
   if defined CONDA_BASE if exist "%CONDA_BASE%\condabin\conda.bat" set "CONDA_BAT=%CONDA_BASE%\condabin\conda.bat"
 )
 
-if not defined CONDA_BAT (
-  for /f "delims=" %%P in ('where conda 2^>nul') do (
-    if /i "%%~xP"==".bat" set "CONDA_BAT=%%~fP"
-  )
-)
-
+:: Fallback: common install locations
 if not defined CONDA_BAT (
   for %%A in (
     "%USERPROFILE%\anaconda3\condabin\conda.bat"
@@ -113,26 +109,37 @@ if not defined CONDA_BAT (
     "C:\ProgramData\miniconda3\condabin\conda.bat"
   ) do if exist "%%~A" set "CONDA_BAT=%%~A"
 )
+
+if not defined CONDA_BAT (
+  set "CONDA_STATUS=missing"
+) else (
+  set "CONDA_STATUS=ok"
+)
 exit /b 0
 
 :CONDA_ACTIVATE
 if "%ENV_NAME%"=="" exit /b 0
-if not defined CONDA_BAT exit /b 0
+if "%CONDA_STATUS%"=="missing" (
+  echo INFO: conda not found in PATH (skip activate %ENV_NAME%)
+  exit /b 0
+)
 call "%CONDA_BAT%" activate "%ENV_NAME%" >nul 2>nul
+if errorlevel 1 echo WARN: conda activate failed for %ENV_NAME%
 exit /b 0
 
 :CONDA_ENV_UPDATE
 if "%ENV_NAME%"=="" exit /b 0
-if not defined CONDA_BAT exit /b 0
+if "%CONDA_STATUS%"=="missing" exit /b 0
 if exist environment.yml (
-  call "%CONDA_BAT%" env update -n "%ENV_NAME%" -f environment.yml --prune
+  call "%CONDA_BAT%" env update -n "%ENV_NAME%" -f environment.yml --prune >nul
   exit /b 0
 )
 if exist env.yml (
-  call "%CONDA_BAT%" env update -n "%ENV_NAME%" -f env.yml --prune
+  call "%CONDA_BAT%" env update -n "%ENV_NAME%" -f env.yml --prune >nul
   exit /b 0
 )
 exit /b 0
+
 
 :: =========================
 :: HELPERS
