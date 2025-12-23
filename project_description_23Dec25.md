@@ -1,3 +1,144 @@
+Below is a **single, self-contained handoff document** you can paste into a new chat after Christmas. It includes: your goals, project structure, workflow rules, branch/remotes strategy, and a **complete `repo_manager.bat` (single-window, bidirectional sync for simple repos, upstream mirroring for fork+upstream repos, and a built-in “text manager” command loop)**. It also documents every function/label and the expected behavior.
+
+---
+
+# Anaconda Workflow Manager (Windows Batch) — Handoff Doc
+
+## 0) What you wanted (requirements)
+
+You want a **single `.bat` file** you can drop into any Git repo to act as a **click-to-sync manager** for conda + Git.
+
+### Your key demands
+
+1. **Single window only** while running (no nested `cmd /k`, no “new terminal session” for the manager).
+
+2. **Automatic sync when you click it** (default action = session mode).
+
+3. Supports two repo types:
+
+   **A) “Simple repo”** (no `upstream` remote; e.g., the manager’s own repo)
+
+   * Do **bidirectional sync** between local `main` and `origin/main`:
+
+     * If local is newer → **commit (if dirty) then push**
+     * If remote is newer → pull/rebase
+     * If diverged → prompt for what to do
+
+   **B) “Fork + upstream repo”** (has both `origin` and `upstream`)
+
+   * Maintain a strict policy:
+
+     * `main` = **pure mirror** of upstream (never put personal work there)
+     * `work` = **your own branch**
+   * On start: auto **mirror upstream → main** (force, but **without checking out `main`**) to avoid script self-destruct.
+   * Then sync `work` from `origin/work`.
+   * Optional merge: merge mirrored `main` into `work` with a rollback backup branch.
+
+4. Keep it robust under university Windows constraints (avoid `%TEMP%` self-relaunch).
+
+5. Conda integration:
+
+   * Optional: activate env name you set.
+   * Optional: update env from `environment.yml` or `env.yml` if present.
+   * Conda detection should be **quiet and explicit** (no “The system cannot find the file specified.” noise).
+
+6. Provide a **text-manager style command loop** in session mode:
+
+   * `help`, `status`, `begin`, `merge`, `menu`, `save`, `exit` (exit = save)
+   * `exit` must work even if you type extra spaces or quotes.
+
+7. You were okay with the limitation:
+
+   * **Cannot auto-push if you close the window with X or shutdown**. The safe workflow is: type `save`/`exit`.
+
+---
+
+## 1) Recommended project structure and branch policy
+
+### For fork+upstream repos
+
+* Remotes:
+
+  * `origin`  = your fork (you push here)
+  * `upstream` = original author repo (you fetch from here)
+* Branches:
+
+  * `main` = **mirror** of `upstream/<default>` (force-updated)
+  * `work` = your work / experiments / notebooks / scripts (the branch you live on)
+
+### For conflict minimization
+
+Keep personal additions in dedicated folders, e.g.
+
+```
+scripts/
+notebooks/
+configs/
+my_project/
+```
+
+Avoid editing upstream core files unless necessary.
+
+---
+
+## 2) Core workflow (“manager behavior”)
+
+### BEGIN
+
+* If **no upstream**:
+
+  * Works on `main` only.
+  * If working tree dirty → prompt: Commit / Stash / Abort.
+  * Fetch origin and compare `main` vs `origin/main`:
+
+    * ahead only → push
+    * behind only → pull --rebase
+    * diverged → prompt (Abort / Rebase+push / Force-push)
+* If **has upstream**:
+
+  * Works on `work` branch in the working tree.
+  * Mirror upstream default branch into local `main` **without checking out `main`**:
+
+    * `git branch -f main upstream/<default>`
+    * `git push --force-with-lease origin main`
+  * Pull `work` from origin with rebase.
+  * Optional: update conda env if YAML present.
+  * Optional: open VS Code without spawning extra cmd window.
+
+### MERGE (only when upstream exists)
+
+* Update `work` from origin first (pull --rebase)
+* Ensure mirrored `main` is up to date from upstream
+* Create backup branch:
+
+  * `backup/work-YYYYMMDD-HHMMSS` pushed to origin
+* Merge `main` into `work`
+
+  * On conflict: stop and tell you to resolve in editor; backup remains for rollback.
+
+### END (save)
+
+* On effective work branch:
+
+  * If dirty → ask for commit message (default `wip`) and commit.
+  * Push to origin.
+
+### SESSION (default when you run without args)
+
+* Runs BEGIN once
+* Then stays in **the same prompt** with a loop:
+
+  * `help`, `status`, `begin`, `merge`, `menu`, `save`, `exit`
+* `save` and `exit` do END and then close the manager.
+
+---
+
+## 3) The final `repo_manager.bat` (full file)
+
+> Put this file in the repo root.
+> Run it from PowerShell or Anaconda Prompt as `.\repo_manager.bat` or just double-click.
+
+```bat
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
@@ -418,3 +559,72 @@ if /i "!CMD!"=="q"      (call :ENDOP & exit /b 0)
 
 echo Unknown command: "!LINE!"  ^(type "help"^)
 goto SESSION_LOOP
+```
+
+---
+
+## 4) Descriptions of each function/label (what they do)
+
+### UI / entry
+
+* `:HELP` — Prints usage and SESSION commands.
+* `:MENU` — Menu UI for interactive choice.
+* `:SESSION` — Default behavior (single window). Runs `BEGIN` then enters command loop.
+* `:SESSION_LOOP` — Reads a line, trims spaces/quotes, uses first token to dispatch commands.
+
+### Setup and detection
+
+* `:SETUP` — Validates repo, detects remotes, fetches origin/upstream, detects default branch heads.
+* `:FIND_CONDA_SILENT` — Detects `conda.bat` using `CONDA_PREFIX`, `CONDA_EXE`, or common install paths. Quiet.
+* `:CONDA_ACTIVATE` — Activates `ENV_NAME` if configured and conda detected.
+* `:CONDA_ENV_UPDATE` — If `environment.yml` or `env.yml` exists, updates env with `--prune`.
+
+### Editor launch
+
+* `:OPEN_CODE` — Launches VS Code by calling `Code.exe` directly if possible; falls back to `code` wrapper; uses `/b` to avoid extra windows.
+
+### Git utilities
+
+* `:CHECKOUT_OR_CREATE branch startpoint` — Checks out branch; creates it from startpoint if missing.
+* `:ENSURE_WORK` — Ensures `work` exists for upstream repos; for simple repos sets effective work to `main`.
+* `:DIRTY_PROMPT_SIMPLE` — In simple repo: if dirty, prompt Commit/Stash/Abort.
+* `:AUTO_COMMIT` — Commit all changes with message prompt (default `wip`).
+
+### Sync strategies
+
+* `:MIRROR_UPSTREAM_TO_MAIN` — Mirrors upstream head into local `main` without checking it out; force-pushes `origin/main`.
+* `:SYNC_SIMPLE_BIDIR_MAIN` — Bidirectional sync for simple repos:
+
+  * commit/stash if dirty
+  * compute `ahead/behind` and choose push/pull
+  * if diverged, prompt for resolution.
+
+### Main commands
+
+* `:BEGIN` — Runs the correct sync strategy depending on upstream existence; updates env; opens VS Code.
+* `:MERGE` — For upstream repos only: update work, mirror main, make backup, merge main into work, push.
+* `:ENDOP` — Commit/push changes on effective work branch.
+
+---
+
+## 5) Known limitations (accepted)
+
+* If you close the window with **X**, the manager cannot run `ENDOP`.
+* For safe behavior, always type `save` or `exit`.
+
+---
+
+## 6) Next steps after Christmas (how to continue)
+
+1. Put `repo_manager.bat` into the **BTO simulator repo root**.
+2. Set:
+
+   * `ENV_NAME=BTO_ML` (or your actual env name)
+3. Ensure remotes:
+
+   * `origin` exists (your fork)
+   * `upstream` exists (author)
+4. Run `.\repo_manager.bat` (or double-click).
+5. If anything unexpected happens, copy the first ~30 lines of output into a new chat.
+
+---
