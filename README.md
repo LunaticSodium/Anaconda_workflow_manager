@@ -1,3 +1,13 @@
+# Anaconda Workflow Manager (Windows Batch)
+
+A single `repo_manager.bat` you drop into a repo root to manage:
+
+- Git sync (simple repo OR fork+upstream mirror policy)
+- Optional conda activation + env update (`environment.yml` / `env.yml`)
+- Single-window interactive session (default)
+
+---
+
 ## How it works (mental model)
 
 This workflow separates two different goals that would otherwise fight each other:
@@ -7,7 +17,7 @@ This workflow separates two different goals that would otherwise fight each othe
 
 To achieve this, the repo uses two branches in the same folder:
 
-- `main` = upstream mirror branch (disposable)
+- `main` = upstream mirror branch (disposable in fork+upstream repos)
 - `work` = your personal work branch (persistent)
 
 When you switch branches (`git checkout main` vs `git checkout work`), the files in the same directory change. This is normal: the folder always reflects the commit that the current branch points to.
@@ -16,10 +26,10 @@ When you switch branches (`git checkout main` vs `git checkout work`), the files
 
 `HEAD` is Git’s "you are here" pointer.
 
-- If `HEAD` points to `work`, your working directory shows the current state of branch `work`.
-- If `HEAD` points to `main`, your working directory shows the current state of branch `main`.
+- If `HEAD` points to `work`, your working directory shows branch `work`.
+- If `HEAD` points to `main`, your working directory shows branch `main`.
 
-You can always check where you are with `git status` (it prints `On branch ...`).
+Check where you are with `git status` (it prints `On branch ...`).
 
 ### Local vs remote
 
@@ -28,25 +38,19 @@ You usually have two remotes:
 - `origin`: your fork (read/write)
 - `upstream`: the author repo (read-only)
 
-Remote-tracking names like `origin/work` or `upstream/main` are *local references* to what Git last saw on those remotes after a `git fetch`.
+Remote-tracking names like `origin/work` or `upstream/main` are local references updated by `git fetch`.
 
 ### Why `main` is mirrored with reset (not merge)
 
-This workflow treats `main` as a pure mirror of the author’s branch.
+This workflow treats `main` as a pure mirror of the author’s default branch.
 
-Mirroring means: local `main` should become *exactly identical* to `upstream/main`.
+Mirroring means: local `main` becomes exactly identical to `upstream/<default>`.
 
-That is why the mirror step uses:
-
-- `git reset --hard upstream/main`
-
-This does not "combine histories" like merge. It simply moves `main` to the same commit as upstream and makes the files match upstream exactly.
-
-Because your GitHub fork also mirrors `main`, the workflow pushes it using:
+The manager enforces this by moving `main` to the upstream commit and pushing:
 
 - `git push --force-with-lease origin main`
 
-`--force-with-lease` is safer than `--force`: it refuses to overwrite the remote if the remote has unexpected new commits.
+`--force-with-lease` is safer than `--force`: it refuses to overwrite the remote if it has unexpected new commits.
 
 ### Why your work is on a separate branch
 
@@ -58,28 +62,27 @@ Your own work lives on `work`, so:
 
 ### What each action achieves conceptually
 
-BEGIN:
-- Synchronize your personal work from `origin/work` (useful when you work on multiple machines).
-- Update `main` to match upstream exactly (so you can run upstream behavior cleanly).
-- Optionally update the conda environment if YAML changed.
+**SYNC**:
+- For simple repos: bidirectional sync between local `main` and `origin/<default>` (push/pull --rebase, and a prompt if diverged).
+- For fork+upstream repos: mirror upstream into `main` (force-with-lease), then pull/rebase `work` from `origin/work`.
+- Optionally activates conda and updates the env if YAML exists (when enabled in config).
 
-MERGE:
+**MERGE** (fork+upstream only):
 - Take upstream updates (already mirrored into `main`) and bring them into `work`.
 - Before merging, the workflow creates a timestamped backup branch so you can rollback easily.
 
-END:
-- Save your current work state by committing and pushing `work` to `origin/work`.
-- This is primarily for backup and cross-machine sync.
+**SAVE**:
+- Save your current work state by committing and pushing the effective branch (`work` for upstream repos, `main` for simple repos).
 
 ### What causes merge conflicts in this workflow?
 
-Conflicts usually occur only when both sides edit the same lines in the same file:
+Conflicts happen when:
 
-- you changed an upstream file in `work`
-- upstream changed the same region
-- you merge `main` into `work`
+- you edited an upstream file in `work`, and
+- upstream edited the same lines, and
+- you merge `main` into `work`.
 
-If you mostly keep your work in separate folders (e.g. `scripts/`, `notebooks/`, `my_project/`), conflicts are rare.
+If you mostly keep your work in separate folders, conflicts are rare.
 
 ### Rollback principle
 
@@ -87,53 +90,43 @@ Before merging upstream into `work`, a backup branch is created:
 
 - `backup/work-YYYYMMDD-HHMMSS`
 
-If the merge causes problems, you can reset `work` back to that backup and force-update your fork’s `work` branch (single-user scenario).
+If a merge causes problems, you can reset `work` back to that backup (and force-update `origin/work` if you are the only person using the fork).
 
+---
 
-
-
-
-
-
-
-
-
-
-## One-time setup per target project
+## One-time setup per target project (fork+upstream case)
 
 ### 1) Fork and clone
 
-Fork the upstream repo to your GitHub account, then clone your fork:
-
-~~~bat
+```bat
 git clone https://github.com/<you>/<repo>.git
 cd <repo>
-~~~
+```
 
 ### 2) Add upstream
 
-~~~bat
+```bat
 git remote add upstream https://github.com/<author>/<repo>.git
 git remote -v
-~~~
+```
 
 You should see both `origin` and `upstream`.
 
-### 3) Create work branch
+### 3) Create work branch (if you haven’t)
 
-~~~bat
+```bat
 git checkout main
 git checkout -b work
 git push -u origin work
-~~~
+```
 
-### 4) Create the conda environment (if the project provides it)
+### 4) Create the conda environment (optional)
 
-If the project has `environment.yml`:
+If the repo provides `environment.yml`:
 
-~~~bat
+```bat
 conda env create -f environment.yml
-~~~
+```
 
 (or `env.yml`)
 
@@ -141,59 +134,65 @@ conda env create -f environment.yml
 
 ## Installing the manager
 
-Place the manager `.bat` file (e.g. `repo_manager.bat`) anywhere you want:
+Recommended: place `repo_manager.bat` in the **target repo root**.
 
-- inside the target repo root, OR
-- in a personal tools folder.
+Edit the config at the top of `repo_manager.bat` if needed:
 
-Edit these variables at the top of the `.bat`:
-
-~~~bat
-set "REPO_DIR=C:\Users\%USERNAME%\OneDrive\Projects\repo"
+```bat
+set "REPO_DIR="
 set "ENV_NAME=my_env"
-~~~
+```
 
-- `REPO_DIR` must point to the target repo directory.
-- `ENV_NAME` must be the conda environment name used by that repo.
+- If `REPO_DIR` is empty, the script uses the folder where the `.bat` is located (recommended).
+- Set `REPO_DIR` only if you keep the script elsewhere and want it to manage a different repo folder.
+- `ENV_NAME` is the conda environment name for this repo (empty = disable conda actions).
+
+Vendoring note for fork+upstream repos:
+- `main` is overwritten by mirroring, so if you want this script tracked in Git, commit it on `work` (not on `main`).
 
 ---
 
 ## Usage
 
-### Interactive menu (double-click)
+### Default (recommended): SESSION mode
 
-Double-click the `.bat` and choose:
+Run (or double-click):
 
-- B = BEGIN
-- M = MERGE
-- E = END
-- Q = quit
+```bat
+repo_manager.bat
+```
 
-Recommended daily flow:
+It will:
+1) sync once
+2) stay in the same window with a prompt
 
-1. Run BEGIN when you start
-2. Run MERGE when you want upstream updates in `work`
-3. Run END before leaving
+SESSION commands:
 
-### Direct mode (optional)
+- `help`   : show help
+- `status` : `git status -sb`
+- `sync`   : run sync again (alias: `begin`)
+- `merge`  : backup + merge `main -> work` (only if upstream exists)
+- `save`   : commit/push and exit
+- `exit`   : same as `save`
 
-If your script supports calling labels via arguments, you can run:
+Important: closing the window with **X** cannot run `save`. Always type `save` / `exit`.
 
-~~~bat
-repo_manager.bat BEGIN
-repo_manager.bat MERGE
-repo_manager.bat ENDOP
-~~~
+### One-shot mode (no session)
 
-(Use the action name that matches your script.)
+```bat
+repo_manager.bat help
+repo_manager.bat sync
+repo_manager.bat merge
+repo_manager.bat save
+```
 
 ---
 
 ## Mirror policy warning (main is disposable)
 
-`main` is treated as a pure mirror of upstream:
+For fork+upstream repos, `main` is treated as a pure mirror of upstream:
 
-- local `main` is reset to `upstream/main`
+- local `main` is reset to `upstream/<default>`
 - `origin/main` is force-updated to match upstream
 
 Do not put personal work on `main`. Use `work`.
@@ -204,93 +203,55 @@ Do not put personal work on `main`. Use `work`.
 
 MERGE creates a backup branch like:
 
-~~~text
+```text
 backup/work-YYYYMMDD-HHMMSS
-~~~
+```
 
-To revert `work` to a backup:
+If a merge goes bad:
 
-~~~bat
-git checkout work
-git reset --hard backup/work-YYYYMMDD-HHMMSS
-git push --force-with-lease origin work
-~~~
-
-This is appropriate for a single-user fork.
+- reset `work` to the backup locally
+- and (if needed) force-update `origin/work` back to that backup commit
 
 ---
 
 ## Conflicts (what to expect)
 
-A conflict occurs when both sides changed the same lines in the same file.
+If conflicts occur during MERGE:
 
-Typical scenario:
-
-- you modified an upstream file in `work`
-- upstream also modified that same section
-- you MERGE `main` into `work`
-
-If a merge conflict happens:
-
-1. Resolve conflicts in VS Code (or any editor)
-2. Then:
-
-~~~bat
-git add .
-git commit
-git push origin work
-~~~
+- resolve conflicts manually
+- then: `git add .` → `git commit` → `git push origin work`
 
 To abort a merge:
 
-~~~bat
+```bat
 git merge --abort
-~~~
+```
 
 ---
 
-## About “push on close / shutdown”
-
-A batch script cannot reliably run cleanup logic when:
-
-- the console window is force-closed
-- the machine shuts down abruptly
-- power is lost
-
-So guaranteed “push on close/shutdown” is not possible in pure batch.
-
-Recommended practice:
-
-- run END explicitly before leaving
-- commit/push frequently (small commits)
-- rely on MERGE backups for safe rollback
-
-Optional improvement (works on normal exit, not forced close): a wrapper that runs BEGIN, opens a working shell, then runs END after you type `exit`:
-
-~~~bat
-@echo off
-call repo_manager.bat BEGIN || exit /b 1
-cmd /k
-call repo_manager.bat ENDOP
-~~~
-
----
-
-## Suggested layout for work
+## Suggested layout for your work
 
 To minimize conflicts, keep personal additions under dedicated folders:
 
-~~~text
+```text
 scripts/
 notebooks/
 configs/
 my_project/
-~~~
+```
 
 Avoid editing upstream core files unless necessary.
 
 ---
 
-## License
+## About “push on close / shutdown”
 
-Choose a license that fits your usage (MIT is common for small tooling).
+A batch script cannot reliably run cleanup logic when the window is closed by **X** or the machine shuts down.
+Use `save` / `exit` to ensure changes are committed and pushed.
+
+---
+
+## Notes
+
+- `LF will be replaced by CRLF` is normal on Windows; it’s Git line-ending normalization.
+- If `git push` prompts for auth, that’s expected (credentials / SSO / PAT).
