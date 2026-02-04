@@ -322,6 +322,28 @@ if errorlevel 1 exit /b 1
 git commit -m "%MSG%"
 exit /b %ERRORLEVEL%
 
+:DIRTY_PROMPT_WORK
+:: pull --rebase requires a clean working tree
+set "STASHED=0"
+git status --porcelain | findstr . >nul
+if errorlevel 1 exit /b 0
+
+echo.
+echo WARNING: uncommitted changes on %WORK_EFF%.
+git status --porcelain
+echo.
+choice /c CSA /n /m "Work branch: [C] Commit  [S] Stash  [A] Abort: "
+if errorlevel 3 exit /b 1
+
+if errorlevel 2 (
+  git stash push -u -m "repo_manager auto stash" || exit /b 1
+  set "STASHED=1"
+  exit /b 0
+)
+
+call :AUTO_COMMIT
+exit /b %ERRORLEVEL%
+
 
 :: =========================
 :: UPSTREAM MIRROR (no checkout main)
@@ -420,26 +442,42 @@ if "%HAS_UPSTREAM%"=="0" (
 :: upstream repo: work branch only
 call :CHECKOUT_OR_CREATE %WORK_EFF% origin/%WORK_EFF% >nul 2>nul
 
-call :IS_DIRTY
-if not errorlevel 1 (
-  echo.
-  echo WARNING: uncommitted changes on %WORK_EFF%.
-  choice /c YN /n /m "Continue anyway (Y) Abort (N): "
-  if errorlevel 2 (echo Aborted. & exit /b 1)
+:: IMPORTANT: rebase pull requires clean working tree -> commit/stash/abort
+call :DIRTY_PROMPT_WORK
+if errorlevel 1 (
+  echo Aborted.
+  exit /b 1
 )
 
 call :MIRROR_UPSTREAM_TO_MAIN
-if errorlevel 1 (echo ERROR: mirror failed & exit /b 1)
+if errorlevel 1 (
+  echo ERROR: mirror failed
+  exit /b 1
+)
 
 echo.
 echo --- Pull work (rebase): origin/%WORK_EFF% ---
 git fetch origin --prune >nul 2>nul
 git pull --rebase origin %WORK_EFF%
-if errorlevel 1 (echo ERROR: pull work failed & exit /b 1)
+if errorlevel 1 (
+  echo ERROR: pull work failed
+  exit /b 1
+)
+
+:: If we stashed, try to restore changes after a clean rebase pull
+if "%STASHED%"=="1" (
+  echo.
+  echo INFO: applying stashed changes back onto %WORK_EFF%.
+  git stash pop
+  if errorlevel 1 (
+    echo WARN: stash pop had conflicts or issues. Check: git stash list
+  )
+)
 
 call :CONDA_ENV_UPDATE
 call :OPEN_CODE
 exit /b 0
+
 
 
 :MERGE
@@ -456,6 +494,10 @@ call :ENSURE_WORK
 if errorlevel 1 (echo ERROR: cannot ensure work & exit /b 1)
 
 call :CHECKOUT_OR_CREATE %WORK_EFF% origin/%WORK_EFF% >nul 2>nul
+
+call :DIRTY_PROMPT_WORK
+if errorlevel 1 (echo Aborted. & exit /b 1)
+
 git pull --rebase origin %WORK_EFF%
 if errorlevel 1 (echo ERROR: pull work failed & exit /b 1)
 
@@ -494,6 +536,15 @@ if errorlevel 1 (
 
 git push origin %WORK_EFF%
 if errorlevel 1 (echo ERROR: push failed & exit /b 1)
+
+if "%STASHED%"=="1" (
+  echo.
+  echo INFO: applying stashed changes back onto %WORK_EFF%.
+  git stash pop
+  if errorlevel 1 (
+    echo WARN: stash pop had conflicts or issues. Check: git stash list
+  )
+)
 
 echo OK: MERGE done. Backup: %BKP%
 exit /b 0
