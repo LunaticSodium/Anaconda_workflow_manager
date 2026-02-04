@@ -84,14 +84,14 @@ echo  Default: SESSION
 echo.
 echo  One-shot:
 echo    repo_manager.bat sync     - sync now
-echo    repo_manager.bat merge    - backup + merge main->work (needs upstream)
+echo    repo_manager.bat merge    - backup + merge main to work (needs upstream)
 echo    repo_manager.bat save     - commit/push now
 echo.
 echo  SESSION commands:
 echo    help     - show help
 echo    status   - git status -sb
 echo    sync     - run sync again   (alias: begin)
-echo    merge    - merge main->work (only if upstream exists)
+echo    merge    - merge main to work (only if upstream exists)
 echo    save     - commit/push and exit
 echo    exit     - same as save
 echo ======================================================
@@ -330,7 +330,7 @@ exit /b %ERRORLEVEL%
 if "%HAS_UPSTREAM%"=="0" exit /b 0
 
 echo.
-echo --- Mirror upstream/%UPSTREAM_HEAD% -> %MAIN_BRANCH% (no checkout) ---
+echo --- Mirror upstream/%UPSTREAM_HEAD% to %MAIN_BRANCH% (no checkout) ---
 git fetch upstream --prune >nul 2>nul
 if errorlevel 1 exit /b 1
 
@@ -349,7 +349,7 @@ exit /b %ERRORLEVEL%
 :: =========================
 :SYNC_SIMPLE_BIDIR_MAIN
 echo.
-echo --- Simple sync: %MAIN_BRANCH% <-> origin/%REMOTE_MAIN% ---
+echo --- Simple sync: %MAIN_BRANCH% vs origin/%REMOTE_MAIN% ---
 git fetch origin --prune >nul 2>nul
 if errorlevel 1 exit /b 1
 
@@ -462,6 +462,13 @@ if errorlevel 1 (echo ERROR: pull work failed & exit /b 1)
 call :MIRROR_UPSTREAM_TO_MAIN
 if errorlevel 1 (echo ERROR: mirror failed & exit /b 1)
 
+set "NEED=0"
+for /f "delims=" %%N in ('git rev-list --count %WORK_EFF%..%MAIN_BRANCH% 2^>nul') do set "NEED=%%N"
+if "%NEED%"=="0" (
+  echo INFO: work already contains main (no merge needed).
+  exit /b 0
+)
+
 echo.
 echo --- Create backup branch ---
 for /f "usebackq delims=" %%T in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"`) do set "TS=%%T"
@@ -474,7 +481,7 @@ git push -u origin "%BKP%"
 if errorlevel 1 (echo ERROR: backup push failed & exit /b 1)
 
 echo.
-echo --- Merge %MAIN_BRANCH% -> %WORK_EFF% ---
+echo --- Merge %MAIN_BRANCH% to %WORK_EFF% ---
 git merge %MAIN_BRANCH%
 if errorlevel 1 (
   echo.
